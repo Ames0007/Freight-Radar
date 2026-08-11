@@ -2,12 +2,8 @@
 
 **World signals on one honest 3D globe. A statistical engine flags ocean-freight disruptions — transit collapses, congestion, Cape-of-Good-Hope reroutes, cargo-specific drops — from free, public IMF PortWatch data; geo-tagged news, storms, hazards and market signals ride alongside as cited, possibly-related context. Every figure is computed in Python from source, and we never forecast: the only future-dated values anywhere are a source model's own published output (NOAA GFS wind, the ACP's projected draft), labelled as theirs.** _(Formerly Freight Radar; repo slug + URL keep the old name.)_
 
-[**▶ Live demo**](https://joshs444.github.io/freight-radar/) · [**📊 Data Atlas**](docs/DATA-ATLAS.md) ([PDF](docs/DATA-ATLAS.pdf)) · [**Full feature ledger**](docs/FEATURES.md)
+[**📊 Data Atlas**](docs/DATA-ATLAS.md) ([PDF](docs/DATA-ATLAS.pdf)) · [**Full feature ledger**](docs/FEATURES.md)
 
-[![CI](https://github.com/joshs444/freight-radar/actions/workflows/ci.yml/badge.svg)](https://github.com/joshs444/freight-radar/actions/workflows/ci.yml)
-[![Deploy](https://github.com/joshs444/freight-radar/actions/workflows/deploy.yml/badge.svg)](https://github.com/joshs444/freight-radar/actions/workflows/deploy.yml)
-[![chat grounding enforced](https://img.shields.io/badge/chat-grounding%20enforced%20in%20CI-2f5d99)](frontend/scripts/check_chat.mjs)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ![Standpoint — the globe](docs/hero.png)
 
