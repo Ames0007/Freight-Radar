@@ -1,0 +1,758 @@
+import { useState, lazy, Suspense } from 'react';
+import { severityCss } from '../lib/colors.ts';
+import { money } from '../lib/format.ts';
+import { Markdown } from '../lib/md.tsx';
+import { Sparkline, SparkHistory } from './Sparkline.tsx';
+import { computeTrend, trendLabel } from '../lib/trend.ts';
+import { sourceName } from '../lib/provenance.ts';
+import Trace from './Trace.tsx';
+import BriefCard from './BriefCard.tsx';
+import SignalBoard from './SignalBoard.tsx';
+import HazardsPanel from './HazardsPanel.tsx';
+import GatunPanel from './GatunPanel.tsx';
+import CargoMix from './CargoMix.tsx';
+import NationalDependence from './NationalDependence.tsx';
+// lazy: defers lib/csv.js + lib/exposure.js + the 128KB ports_lookup.json until the
+// user actually opens the upload flow (never fetched on first load).
+const Upload = lazy(() => import('./Upload.tsx'));
+import SearchBox from './SearchBox.tsx';
+import type { AppliedExposure } from './Upload.tsx';
+import { exportBrief, exportExposureCSV } from '../lib/exporters.ts';
+import type {
+  OfficialEvent as OfficialEventType,
+  StormChip as StormChipType,
+  CostBand,
+  BusinessImpact as BusinessImpactType,
+  Market as MarketType,
+  MarketIndicator,
+  NewsEntry,
+  MonitorEntity,
+  Brief,
+  Disruptions,
+  Gatun,
+  ExposureSummary,
+  Flag,
+  Snapshot,
+  TimeseriesSeries,
+  SignalsFdr,
+} from '../types.ts';
+
+const CONF_LABEL: Record<string, string> = {
+  high: 'high',
+  medium: 'derived',
+  low: 'partial',
+  none: 'unrouted',
+};
+const ALERT_C: Record<string, string> = { RED: '#c0392b', ORANGE: '#c2611f', GREEN: '#3f7a5a' };
+
+interface OfficialEventProps {
+  oe: OfficialEventType | null | undefined;
+}
+
+function OfficialEvent({ oe }: OfficialEventProps) {
+  if (!oe) return null;
+  return (
+    <div className="fr-oe">
+      <span className="fr-oe-badge" style={{ background: ALERT_C[oe.alertlevel] || '#888' }}>
+        {oe.alertlevel}
+      </span>
+      <span className="fr-oe-text">
+        Official corroboration: <b>{oe.name}</b> ({oe.type_label}, {oe.from} → {oe.to}) —{' '}
+        {oe.source}
+      </span>
+    </div>
+  );
+}
+
+interface StormChipProps {
+  storm: StormChipType | null | undefined;
+}
+
+function StormChip({ storm }: StormChipProps) {
+  if (!storm) return null;
+  const wind = storm.max_wind_kmh ? ` · ${storm.max_wind_kmh} km/h winds` : '';
+  return (
+    <div className="fr-storm">
+      <span className="fr-storm-badge">🌀 {storm.agency}</span>
+      <span className="fr-storm-text">
+        Possibly related:{' '}
+        <b>
+          {storm.category} {storm.name}
+        </b>{' '}
+        ~{storm.km} km away{wind} · {storm.basin}
+        {storm.url && (
+          <>
+            {' '}
+            ·{' '}
+            <a
+              href={storm.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              forecast
+            </a>
+          </>
+        )}
+        <span className="fr-storm-note">
+          live {storm.source} forecast position — not a confirmed cause
+        </span>
+      </span>
+    </div>
+  );
+}
+
+interface FilterDef {
+  key: string;
+  label: string;
+}
+
+const FILTERS: FilterDef[] = [
+  { key: 'all', label: 'All' },
+  { key: 'critical', label: 'Critical' },
+  { key: 'chokepoints', label: 'Chokepoints' },
+  { key: 'ports', label: 'Ports' },
+];
+
+interface MetricProps {
+  v: number | null | undefined;
+  alert: boolean;
+}
+
+function Metric({ v, alert }: MetricProps) {
+  if (v == null) return <span className="fr-metric fr-dim">—</span>;
+  const up = v > 0;
+  return (
+    <span className={`fr-metric ${alert ? 'fr-hot' : ''}`}>
+      {up ? '↑' : '↓'} {up ? '+' : ''}
+      {Math.round(v)}%
+    </span>
+  );
+}
+
+interface CostLineProps {
+  label: string;
+  band: CostBand | null | undefined;
+  strong?: boolean;
+}
+
+function CostLine({ label, band, strong }: CostLineProps) {
+  if (!band) return null;
+  return (
+    <div className={`fr-cost-line ${strong ? 'is-total' : ''}`}>
+      <span className="fr-cost-label">{label}</span>
+      <span className="fr-cost-val">
+        <b>{money(band.expected)}</b>
+        <span className="fr-biz-range">
+          {' '}
+          {money(band.low)}–{money(band.high)}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+interface BusinessImpactProps {
+  b: BusinessImpactType | null | undefined;
+}
+
+function BusinessImpact({ b }: BusinessImpactProps) {
+  const [showWork, setShowWork] = useState(false);
+  // Hide the block entirely when there's no modeled exposure — with the P0 signal gate most
+  // rows have none, so an empty "no exposure" card was just bloat. The "so what" still leads
+  // the rows that DO have exposure (and the collapsed row shows the headline number).
+  if (!b || !b.lane_count) return null;
+  const d: Partial<CostBand> = b.est_delay_days || {};
+  const cs = b.cost_stack || {};
+  const carrying = cs.carrying_cost_of_delay_usd || b.carrying_cost_of_delay_usd;
+  const reroute = cs.reroute_premium_usd;
+  const total = cs.total_cost_of_disruption_usd || b.total_cost_of_disruption_usd;
+  const wc: Partial<CostBand> =
+    cs.working_capital_tied_up_usd || b.working_capital_tied_up_usd || {};
+  const conf = b.routing_confidence;
+  return (
+    <div className="fr-biz">
+      <div className="fr-biz-head">
+        Business impact <span className="fr-biz-est">estimate</span>
+        {conf && (
+          <span className={`fr-biz-conf c-${conf}`}>routing: {CONF_LABEL[conf] || conf}</span>
+        )}
+      </div>
+      <div className="fr-biz-stat">
+        <b>{money(b.exposed_value_usd)}</b> of your trade exposed · {b.lane_count} lane
+        {b.lane_count > 1 ? 's' : ''}
+        {b.exposed_teu ? ` · ${b.exposed_teu.toLocaleString()} TEU` : ''}
+      </div>
+      <div className="fr-biz-stat fr-biz-sub">
+        est.{' '}
+        <b>
+          +{d.low}–{d.high}d
+        </b>{' '}
+        added transit
+      </div>
+
+      <div className="fr-cost-stack">
+        <CostLine label="carrying cost of delay" band={carrying} />
+        {(reroute?.expected ?? 0) > 0 && <CostLine label="reroute premium" band={reroute} />}
+        <CostLine label="cost of disruption" band={total} strong />
+      </div>
+      <div className="fr-biz-stat fr-biz-sub">
+        ≈<b>{money(wc.expected)}</b> working capital tied up (locked, not lost — excluded from
+        total)
+      </div>
+
+      {(b.method?.length ?? 0) > 0 && (
+        <>
+          <button
+            className="fr-biz-work"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowWork((s) => !s);
+            }}
+          >
+            {showWork ? '▾' : '▸'} show your work
+          </button>
+          {showWork && (
+            <div className="fr-biz-method">
+              {b.method.map((m, i) => (
+                <div key={i} className="fr-biz-mline">
+                  <code>{m.line}</code> = {m.basis}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      {(b.top_items?.length ?? 0) > 0 && (
+        <div className="fr-biz-items">{b.top_items.join(' · ')}</div>
+      )}
+      <div className="fr-biz-note">
+        assumes ~{Math.round((b.carrying_rate_assumed || 0.25) * 100)}%/yr carrying cost · sample
+        trade data — replace with your terms
+      </div>
+    </div>
+  );
+}
+
+interface MarketBlockProps {
+  market: MarketType | null | undefined;
+  flagId: string;
+}
+
+function MarketBlock({ market, flagId }: MarketBlockProps) {
+  const link = market?.items?.[flagId];
+  if (!link) return null;
+  const inds: Record<string, MarketIndicator> = market?.indicators || {};
+  const shown = link.linked
+    .map((k) => inds[k])
+    .filter((v): v is MarketIndicator => Boolean(v) && v.value != null);
+  if (!shown.length) return null;
+  return (
+    <div className="fr-market">
+      <div className="fr-market-head">
+        Market context <span>· in this chokepoint's orbit</span>
+      </div>
+      <div className="fr-market-grid">
+        {shown.map((v) => {
+          const up = (v.change_pct || 0) >= 0;
+          return (
+            <div key={v.name} className="fr-mkt">
+              <span className="fr-mkt-name">
+                {v.name}
+                {v.estimate ? ' ·est' : ''}
+              </span>
+              <span className="fr-mkt-row">
+                <b>{v.value}</b>
+                <span className="fr-mkt-unit">{v.unit}</span>
+                {v.change_pct != null && (
+                  <span className={`fr-mkt-chg ${up ? 'up' : 'down'}`}>
+                    {up ? '▲' : '▼'} {up ? '+' : ''}
+                    {v.change_pct}%
+                  </span>
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="fr-market-foot">{link.disclaimer}</div>
+    </div>
+  );
+}
+
+interface NewsBlockProps {
+  news: NewsEntry | null | undefined;
+}
+
+function NewsBlock({ news }: NewsBlockProps) {
+  if (!news) return null;
+  return (
+    <div className="fr-news">
+      <div className="fr-news-head">
+        Possibly related coverage <span>· not a confirmed cause</span>
+      </div>
+      {news.items?.length ? (
+        news.items.map((a, i) => (
+          <a
+            key={i}
+            className="fr-news-item"
+            href={a.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span className="fr-news-title">{a.title}</span>
+            <span className="fr-news-meta">
+              {a.source}
+              {a.source && a.published ? ' · ' : ''}
+              {a.published}
+            </span>
+          </a>
+        ))
+      ) : (
+        <div className="fr-news-none">No qualifying recent coverage found.</div>
+      )}
+    </div>
+  );
+}
+
+interface RowProps {
+  e: MonitorEntity;
+  active: boolean;
+  onSelect: (e: MonitorEntity | null) => void;
+  series: Record<string, TimeseriesSeries> | undefined;
+  dates: string[] | undefined;
+  news: NewsEntry | null | undefined;
+  market: MarketType | null | undefined;
+  scrubIndex: number | null;
+  watched: Set<string> | null | undefined;
+  onToggleWatch: ((id: string) => void) | null | undefined;
+  gatun: Gatun | null | undefined;
+  onHover?: (id: string | null) => void;
+}
+
+function Row({
+  e,
+  active,
+  onSelect,
+  series,
+  dates,
+  news,
+  market,
+  scrubIndex,
+  watched,
+  onToggleWatch,
+  gatun,
+  onHover,
+}: RowProps) {
+  const ser = series?.[e.id];
+  const sparkColor = e.critical ? severityCss(e.severity) : '#aab3c0';
+  const tl = trendLabel(computeTrend(ser?.values), e.flag?.kind);
+  const isWatched = watched?.has(e.id);
+  // "so what" inline on the collapsed row: the modeled trade exposure, when there is any
+  const exposed = e.flag?.business?.lane_count ? money(e.flag.business.exposed_value_usd) : null;
+  return (
+    <div
+      className={`fr-row ${active ? 'is-active' : ''} ${e.critical ? 'is-critical' : ''}`}
+      onMouseEnter={() => onHover?.(e.id)}
+      onMouseLeave={() => onHover?.(null)}
+    >
+      <div className="fr-row-main">
+        <button
+          type="button"
+          className={`fr-star ${isWatched ? 'on' : ''}`}
+          aria-pressed={isWatched}
+          aria-label={
+            isWatched ? `Unwatch ${e.name}` : `Watch ${e.name} — notify on new or escalated flags`
+          }
+          onClick={() => onToggleWatch?.(e.id)}
+        >
+          {isWatched ? '★' : '☆'}
+        </button>
+        <button
+          type="button"
+          className="fr-row-head"
+          aria-expanded={active}
+          onClick={() => onSelect(active ? null : e)}
+        >
+          {e.critical ? (
+            <span
+              className="fr-sev"
+              style={{ color: severityCss(e.severity), borderColor: severityCss(e.severity) }}
+            >
+              {e.severity}
+            </span>
+          ) : (
+            <span className="fr-rowdot" />
+          )}
+          <div className="fr-row-titles">
+            <span className="fr-row-name">{e.name}</span>
+            <span className="fr-row-sub">
+              {e.type}
+              {e.flag ? ` · ${e.flag.kind.replaceAll('_', ' ')}` : ' · normal'}
+              {tl && (
+                <span className={`fr-trend ${tl.cls}`}>
+                  {' '}
+                  · {tl.arrow} {tl.label}
+                </span>
+              )}
+              {exposed && <span className="fr-row-exposed"> · {exposed} exposed</span>}
+            </span>
+          </div>
+          {ser && <Sparkline values={ser.values} color={sparkColor} mark={scrubIndex} />}
+          <Metric v={e.metric} alert={e.critical} />
+        </button>
+      </div>
+      {active && (
+        <div className="fr-row-brief">
+          {e.flag && <Markdown text={e.flag.brief_md} />}
+          {/* lead with "who cares" — the exposure — then the chart, then context (each self-
+              hides when empty), so a signal row answers "so what" before it asks you to read. */}
+          {e.flag && <BusinessImpact b={e.flag.business} />}
+          <SparkHistory
+            s={ser}
+            dates={dates}
+            asOf={e.flag?.as_of}
+            baseline={e.flag?.baseline ?? e.baseline}
+            color={sparkColor}
+          />
+          <CargoMix
+            mix={e.cargo_mix}
+            unit={e.type === 'chokepoint' ? 'transits' : 'port calls'}
+            avgSize={e.avg_vessel_size_dwt}
+            tonnage={e.capacity_total}
+          />
+          {e.type === 'port' && (
+            <NationalDependence
+              shareImport={e.share_import}
+              shareExport={e.share_export}
+              country={e.country}
+            />
+          )}
+          {gatun?.available && gatun.portid === e.id && <GatunPanel gatun={gatun} />}
+          {e.flag?.live_storm && <StormChip storm={e.flag.live_storm} />}
+          {e.flag?.official_event && <OfficialEvent oe={e.flag.official_event} />}
+          {e.flag && market && <MarketBlock market={market} flagId={e.flag.flag_id} />}
+          {e.flag && news && <NewsBlock news={news} />}
+          {e.flag ? <Provenance flag={e.flag} /> : <UnflaggedTrace e={e} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The lineage trace under an expanded flag, now rendered by the ONE <Trace> primitive (P1-A): the
+// stepped raw -> computed-by-us -> published-number -> cited-source chain. The URL + license are
+// stamped on the flag from the registry root (P0-B); layerId="flags" is a backstop so the tier
+// resolves from the catalog even before the record's own fields are read. A flag is just a detected
+// anomaly on the cited PortWatch series — the trace makes that legible at the point.
+function Provenance({ flag }: { flag: Flag }) {
+  const v = (n: number) => (Math.abs(n) >= 100 ? Math.round(n).toLocaleString() : n.toFixed(2));
+  const pct = `${flag.pct_change > 0 ? '+' : ''}${flag.pct_change.toFixed(1)}%`;
+  return (
+    <Trace
+      layerId="flags"
+      tier="measured · computed in Python"
+      raw={`PortWatch ${flag.metric}`}
+      method={flag.method}
+      published={`${v(flag.value)} vs ${v(flag.baseline)} baseline · ${pct} vs 28d`}
+      source={sourceName(flag.source)}
+      sourceUrl={flag.source_url}
+      license={flag.license}
+      asOf={flag.as_of}
+    />
+  );
+}
+
+// The most-clicked thing on the globe is an UNFLAGGED port or chokepoint, and it used to trace to
+// "<type> · monitored" — nothing. Now it traces too, on the SAME measured series a flag is detected
+// from — but ports and chokepoints are DIFFERENT shapes (adversarial fence #4/#5):
+//   • a CHOKEPOINT (28; carries n_total/baseline/pct) gets the computed trace: throughput vs the
+//     28-day baseline, the % change WE compute.
+//   • a PORT (2065; carries only an annual vessel COUNT) gets a CITED-COUNT trace — no z-score, no
+//     "% vs 28d", NOT labelled "computed in Python". Reusing the chokepoint metric under a port
+//     would mislabel a static count as a computed anomaly.
+function UnflaggedTrace({ e }: { e: MonitorEntity }) {
+  if (e.type === 'chokepoint' && e.n_total != null && e.baseline != null) {
+    const n = Math.round(e.n_total).toLocaleString();
+    const base = Math.round(e.baseline).toLocaleString();
+    const pct = e.metric;
+    const pctStr = pct != null ? ` · ${pct > 0 ? '+' : ''}${pct.toFixed(1)}% vs 28d` : '';
+    return (
+      <Trace
+        layerId="chokepoints"
+        tier="measured · computed in Python"
+        raw="PortWatch AIS port-calls (daily)"
+        method="latest day vs trailing-28d baseline"
+        published={`${n}/day vs ${base} baseline${pctStr}`}
+        asOf={e.as_of}
+      />
+    );
+  }
+  // a PORT: a cited annual count, never a computed anomaly — omit method + published (fence #4)
+  return (
+    <Trace
+      layerId="ports"
+      tier="cited annual count — not a computed anomaly"
+      raw={
+        e.vessels != null
+          ? `annual vessel count: ${Math.round(e.vessels).toLocaleString()}`
+          : 'annual vessel activity'
+      }
+      asOf={e.as_of}
+    />
+  );
+}
+
+interface SearchBoxFeedProps {
+  snapshot: Snapshot | null;
+  flagByPort: Record<string, Flag> | null | undefined;
+  onJump: (portid: string) => void;
+  onResults?: (ids: string[]) => void;
+}
+
+interface UploadFeedProps {
+  flags: Flag[];
+  applied: AppliedExposure | null;
+  onApply: (result: AppliedExposure) => void;
+  onReset: () => void;
+}
+
+interface DataFeedProps {
+  rows: MonitorEntity[];
+  minorRows: MonitorEntity[];
+  filter: string;
+  setFilter: (key: string) => void;
+  criticalCount: number;
+  exposure: ExposureSummary | null | undefined;
+  upload: UploadFeedProps | null | undefined;
+  search: SearchBoxFeedProps | null | undefined;
+  brief: Brief | null | undefined;
+  flags: Flag[] | null | undefined;
+  disruptions: Disruptions | null | undefined;
+  gatun: Gatun | null | undefined;
+  scrubDate: string | null | undefined;
+  scrubIndex: number | null;
+  onLive: () => void;
+  watched: Set<string> | null | undefined;
+  onToggleWatch: (id: string) => void;
+  onPickEntity: (portid: string) => void;
+  series: Record<string, TimeseriesSeries> | undefined;
+  dates: string[] | undefined;
+  news: Record<string, NewsEntry> | undefined;
+  market: MarketType | null | undefined;
+  signals: SignalsFdr | null | undefined;
+  selected: MonitorEntity | null | undefined;
+  onSelect: (e: MonitorEntity | null) => void;
+  onHover?: (id: string | null) => void;
+  asOf: string;
+  source: string;
+}
+
+export default function DataFeed({
+  rows,
+  minorRows,
+  filter,
+  setFilter,
+  criticalCount,
+  exposure,
+  upload,
+  search,
+  brief,
+  flags,
+  disruptions,
+  gatun,
+  scrubDate,
+  scrubIndex,
+  onLive,
+  watched,
+  onToggleWatch,
+  onPickEntity,
+  series,
+  dates,
+  news,
+  market,
+  signals,
+  selected,
+  onSelect,
+  onHover,
+  asOf,
+  source,
+}: DataFeedProps) {
+  const filters = watched?.size
+    ? [...FILTERS, { key: 'watching', label: `★ ${watched.size}` }]
+    : FILTERS;
+  // the long tail of flagged-but-minor anomalies is hidden by default; one click reveals it
+  const [showMinor, setShowMinor] = useState(false);
+  // multi-domain count: the maritime signal flags AND the cross-domain (trucking/rail/air/inventory/
+  // commodity/metals/macro) anomalies, so the header never reads as "ocean only".
+  const crossCount = (signals?.items ?? []).filter((s) => s.fdr_significant).length;
+  return (
+    <aside className="fr-feed" id="fr-monitor" tabIndex={-1} aria-label="Monitor feed">
+      {/* sticky controls — never scroll away, so you can always re-filter/search */}
+      <div className="fr-feed-sticky">
+        <div className="fr-feed-head">
+          <span className="fr-feed-title">Monitor</span>
+          <span className="fr-feed-count">
+            <b>{criticalCount}</b> ocean
+            {crossCount > 0 && (
+              <>
+                {' · '}
+                <b>{crossCount}</b> cross-domain
+              </>
+            )}
+          </span>
+        </div>
+
+        {scrubDate && (
+          <div className="fr-scrubbing">
+            <span>
+              ▶ viewing <b>{scrubDate}</b> — feed reflects flags fired by then
+            </span>
+            <button onClick={onLive}>back to live</button>
+          </div>
+        )}
+
+        {search && <SearchBox {...search} />}
+
+        <div className="fr-filters">
+          {filters.map((f) => (
+            <button
+              key={f.key}
+              className={`fr-chip ${filter === f.key ? 'on' : ''}`}
+              onClick={() => setFilter(f.key)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* the single scroll region — context blocks scroll WITH the issues so the issues
+          (the point of a "Monitor") always own the remaining height + stay reachable */}
+      <div className="fr-rows">
+        {brief && (
+          <BriefCard
+            brief={brief}
+            onPickEntity={onPickEntity}
+            onExport={() => exportBrief(brief)}
+          />
+        )}
+
+        {/* the multi-domain signal — trucking/inventories/commodities — beyond the maritime spine */}
+        <SignalBoard signals={signals} />
+
+        {disruptions && <HazardsPanel disruptions={disruptions} onPickEntity={onPickEntity} />}
+
+        {upload && (
+          <Suspense fallback={null}>
+            <Upload {...upload} />
+          </Suspense>
+        )}
+
+        {exposure && (
+          <div className="fr-exposure">
+            <div className="fr-exp-label">
+              Your exposure{' '}
+              <span>· {upload?.applied ? 'your uploaded data' : 'sample trade data'}</span>
+              <button
+                type="button"
+                className="fr-exp-export"
+                onClick={() => exportExposureCSV(flags)}
+                title="Download exposure as CSV"
+                aria-label="Download your exposure as CSV"
+              >
+                ↓ csv
+              </button>
+            </div>
+            <div className="fr-exp-row">
+              <div>
+                <b>{money(exposure.exposed_value_usd)}</b>
+                <span>exposed</span>
+              </div>
+              <div>
+                <b>
+                  {money(
+                    (exposure.total_cost_of_disruption_usd || exposure.carrying_cost_of_delay_usd)
+                      ?.expected
+                  )}
+                </b>
+                <span>cost of disruption</span>
+              </div>
+              <div>
+                <b>{exposure.active_disruptions_hitting_you}</b>
+                <span>hitting you</span>
+              </div>
+            </div>
+            {exposure.lanes_with_known_route != null && (
+              <div className="fr-exp-cov">
+                {exposure.lanes_with_known_route} of {exposure.total_flows} lanes modeled (
+                {exposure.coverage_pct}%)
+              </div>
+            )}
+          </div>
+        )}
+
+        {rows.length === 0 &&
+          (filter === 'critical' ? (
+            <div className="fr-empty fr-allclear">✓ All clear — no critical flags right now.</div>
+          ) : (
+            <div className="fr-empty">Nothing to show in this filter.</div>
+          ))}
+        {rows.map((e) => (
+          <Row
+            key={e.id}
+            e={e}
+            active={selected?.id === e.id}
+            onSelect={onSelect}
+            onHover={onHover}
+            series={series}
+            dates={dates}
+            news={e.flag ? news?.[e.flag.flag_id] : null}
+            market={market}
+            scrubIndex={scrubIndex}
+            watched={watched}
+            onToggleWatch={onToggleWatch}
+            gatun={gatun}
+          />
+        ))}
+
+        {minorRows.length > 0 && (
+          <button
+            type="button"
+            className="fr-show-minor"
+            onClick={() => setShowMinor((v) => !v)}
+            aria-expanded={showMinor}
+          >
+            {showMinor
+              ? '− hide minor anomalies'
+              : `+ ${minorRows.length} minor anomalies — small moves on low-traffic ports`}
+          </button>
+        )}
+        {showMinor &&
+          minorRows.map((e) => (
+            <Row
+              key={e.id}
+              e={e}
+              active={selected?.id === e.id}
+              onSelect={onSelect}
+              onHover={onHover}
+              series={series}
+              dates={dates}
+              news={e.flag ? news?.[e.flag.flag_id] : null}
+              market={market}
+              scrubIndex={scrubIndex}
+              watched={watched}
+              onToggleWatch={onToggleWatch}
+              gatun={gatun}
+            />
+          ))}
+      </div>
+      <div className="fr-feed-foot">
+        <span>{source}</span>
+        <span>
+          as of <b>{asOf}</b>
+        </span>
+      </div>
+    </aside>
+  );
+}

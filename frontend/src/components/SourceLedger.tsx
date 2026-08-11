@@ -1,0 +1,348 @@
+import { useEffect, useState } from 'react';
+
+// The "show your work" page — renders the registry catalog (data/store/catalog.json) as a
+// human-readable provenance ledger: every layer, its epistemic tier, its cited source +
+// license, what it is (the owned metric for measured layers, the honesty note for context),
+// and how fresh it is (from manifest.json). The same catalog an agent reads via MCP, made
+// legible to a person. This IS the honesty brand, on one page.
+
+interface Source {
+  name: string;
+  url: string;
+  license: string;
+}
+interface Layer {
+  id: string;
+  kind: string;
+  producer: string;
+  metric: string | null;
+  sidecar: string | null;
+  source: Source | null;
+  honesty_note: string | null;
+  contract_monitored?: boolean;
+}
+interface Catalog {
+  counts: { layers: number; by_tier: Record<string, number> };
+  layers: Layer[];
+}
+interface Manifest {
+  layers?: Record<string, { present: boolean; generated_at?: string }>;
+}
+interface Scoreboard {
+  honesty_gates?: Record<string, boolean>;
+  honesty_ci_pass_rate?: number;
+  zero_cost_compliance_pct?: number;
+  source_coverage_pct?: number;
+}
+interface BriefingClaim {
+  text: string;
+  cites: string[];
+  section?: string;
+  flag_id?: string;
+}
+interface Briefing {
+  agent_model: string;
+  disclaimer?: string;
+  claims: BriefingClaim[];
+}
+interface Demotions {
+  note?: string;
+  demoted: { stem: string; violations: string[] }[];
+}
+interface ClaimedVsMeasured {
+  claimant: string;
+  claim: string;
+  source_url: string;
+  standpoint_says: string;
+  measured: {
+    what: string;
+    value: number;
+    label?: string;
+    as_of?: string;
+    method: string;
+  } | null;
+}
+interface NewsArticle {
+  title: string;
+  url: string;
+  source: string;
+}
+interface NewsData {
+  items: Record<string, { items: NewsArticle[] }>;
+}
+
+const TIER: Record<string, { label: string; cls: string }> = {
+  SPINE: { label: 'measured · spine', cls: 'spine' },
+  SIGNAL: { label: 'measured · signal', cls: 'signal' },
+  CONTEXT: { label: 'cited · context', cls: 'context' },
+  DERIVED: { label: 'derived · templated', cls: 'derived' },
+};
+const ORDER = ['SPINE', 'SIGNAL', 'CONTEXT', 'DERIVED'];
+
+function ageDays(iso?: string): string {
+  if (!iso) return '—';
+  const d = (Date.now() - new Date(iso).getTime()) / 86400000;
+  if (d < 1) return 'today';
+  if (d < 2) return '1 day';
+  return `${Math.floor(d)} days`;
+}
+
+export default function SourceLedger() {
+  const [cat, setCat] = useState<Catalog | null>(null);
+  const [man, setMan] = useState<Manifest>({});
+  const [score, setScore] = useState<Scoreboard | null>(null);
+  const [brief, setBrief] = useState<Briefing | null>(null);
+  const [demo, setDemo] = useState<Demotions | null>(null);
+  const [cvm, setCvm] = useState<ClaimedVsMeasured | null>(null);
+  const [news, setNews] = useState<NewsData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const base = import.meta.env.BASE_URL || '/';
+    Promise.all([
+      fetch(base + 'data/store/catalog.json').then((r) => r.json() as Promise<Catalog>),
+      fetch(base + 'data/manifest.json')
+        .then((r) => r.json() as Promise<Manifest>)
+        .catch(() => ({})),
+      fetch(base + 'data/scoreboard.json')
+        .then((r) => r.json() as Promise<Scoreboard>)
+        .catch(() => null),
+      fetch(base + 'data/ai_briefing.json')
+        .then((r) => r.json() as Promise<Briefing>)
+        .catch(() => null),
+      // present only when the weekly metabolism quarantined a drifted feed to dark
+      fetch(base + 'data/demotions.json')
+        .then((r) => (r.ok ? (r.json() as Promise<Demotions>) : null))
+        .catch(() => null),
+      // a competitor's cited claim vs our measured truth — the falsifiable contrast
+      fetch(base + 'data/claimed_vs_measured.json')
+        .then((r) => (r.ok ? (r.json() as Promise<ClaimedVsMeasured>) : null))
+        .catch(() => null),
+      // per-flag curated news — lets the briefing's connection lines link to the actual articles
+      fetch(base + 'data/news.json')
+        .then((r) => (r.ok ? (r.json() as Promise<NewsData>) : null))
+        .catch(() => null),
+    ])
+      .then(([c, m, s, b, d, cv, nw]) => {
+        setCat(c);
+        setMan(m);
+        setScore(s);
+        setBrief(b);
+        setDemo(d);
+        setCvm(cv);
+        setNews(nw);
+      })
+      .catch((e: Error) => setErr(String(e.message || e)));
+  }, []);
+
+  if (err) return <div className="fr-ledger">Could not load the catalog: {err}</div>;
+  if (!cat) return <div className="fr-ledger">Loading the source ledger…</div>;
+
+  const layers = [...cat.layers].sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind));
+  const bt = cat.counts.by_tier;
+
+  return (
+    <div className="fr-ledger">
+      <div className="fr-ledger-head">
+        <h2>Source ledger — show your work</h2>
+        <p className="fr-ledger-sub">
+          {cat.counts.layers} layers · {bt.SPINE} spine + {bt.SIGNAL} signal (measured) ·{' '}
+          {bt.CONTEXT} cited context. Every number is computed in Python from a cited source;
+          context is possibly-related, never a stated cause. Feeds marked{' '}
+          <span className="fr-ledger-mon">shape ✓</span> have their schema + liveness
+          machine-checked every refresh — a drifted source fails the run, never ships silently.
+        </p>
+      </div>
+      {cvm && (
+        <div className="fr-cvm" data-testid="fr-cvm">
+          <div className="fr-cvm-claimed">
+            <span className="fr-cvm-tag">a competitor claims</span>
+            <p className="fr-cvm-claim">“{cvm.claim}”</p>
+            <a className="fr-cvm-src" href={cvm.source_url} target="_blank" rel="noreferrer">
+              {cvm.claimant}
+            </a>
+          </div>
+          <div className="fr-cvm-vs" aria-hidden>
+            vs
+          </div>
+          <div className="fr-cvm-measured">
+            <span className="fr-cvm-tag measured">Standpoint measures</span>
+            {cvm.measured ? (
+              <p className="fr-cvm-claim">
+                {cvm.measured.what}: <b>{cvm.measured.value}</b>
+                {cvm.measured.label ? ` (${cvm.measured.label})` : ''}
+                {cvm.measured.as_of ? ` · as of ${cvm.measured.as_of}` : ''}
+              </p>
+            ) : (
+              <p className="fr-cvm-claim">the measured value, cited and dated</p>
+            )}
+            <span className="fr-cvm-says">{cvm.standpoint_says}</span>
+          </div>
+        </div>
+      )}
+      {demo && demo.demoted.length > 0 && (
+        <div className="fr-ledger-demoted" data-testid="fr-ledger-demoted">
+          <span className="fr-ledger-demoted-h">⤓ auto-demoted to dark this refresh</span>
+          {demo.demoted.map((d) => (
+            <span key={d.stem} className="fr-ledger-demoted-row" title={d.violations.join(' · ')}>
+              <code>{d.stem}</code> failed its data contract — pulled rather than shown broken
+            </span>
+          ))}
+          <span className="fr-ledger-demoted-m">
+            Rot is loud: a feed that breaks its schema disappears, never silently misleads.
+          </span>
+        </div>
+      )}
+      {score?.honesty_gates && (
+        <div className="fr-ledger-score" data-testid="fr-ledger-score">
+          <span className="fr-ledger-score-h">honesty self-grade</span>
+          {Object.entries(score.honesty_gates).map(([k, ok]) => (
+            <span key={k} className={`fr-gate ${ok ? 'ok' : 'bad'}`} title={k}>
+              {ok ? '✓' : '✗'} {k.replace(/_/g, ' ')}
+            </span>
+          ))}
+          <span className="fr-ledger-score-m">
+            CI {score.honesty_ci_pass_rate ?? '—'}% · zero-cost{' '}
+            {score.zero_cost_compliance_pct ?? '—'}% · sources {score.source_coverage_pct ?? '—'}%
+          </span>
+        </div>
+      )}
+      {brief && brief.claims?.length > 0 && (
+        <div className="fr-brief-derived" data-testid="fr-brief-derived">
+          <div className="fr-brief-derived-h">
+            <span className="fr-tier derived">derived · templated commentary</span>
+            <span className="fr-brief-derived-by">{brief.agent_model}</span>
+          </div>
+          {(() => {
+            // Render the same gated claims as a sectioned brief: a synthesized lead line, then
+            // the measured spine, the fact<->news connections, and the context ring. Grouping is
+            // presentational only — every line is still an atomic, cited, gate-checked claim.
+            const SECTIONS: { key: string; label: string }[] = [
+              { key: 'spine', label: 'Measured spine' },
+              { key: 'connection', label: 'Connected to world events — association, not cause' },
+              { key: 'context', label: 'Context ring' },
+            ];
+            const claimRow = (c: BriefingClaim, i: number) => {
+              // a connection claim names its co-occurring sources; link each to its actual article
+              const arts = (c.flag_id && news?.items?.[c.flag_id]?.items) || [];
+              return (
+                <li key={i}>
+                  <span>{c.text}</span>{' '}
+                  {c.cites.map((cite) => (
+                    <code key={cite} className="fr-cite">
+                      {cite}
+                    </code>
+                  ))}
+                  {arts.length > 0 && (
+                    <div className="fr-brief-links">
+                      {arts.map((a, j) => (
+                        <a
+                          key={j}
+                          href={a.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="fr-brief-link"
+                          title={a.title}
+                        >
+                          {a.source}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              );
+            };
+            const lead = brief.claims.filter((c) => c.section === 'lead');
+            const untagged = brief.claims.filter((c) => !c.section); // back-compat: flat list
+            return (
+              <>
+                {lead.map((c, i) => (
+                  <p key={`lead${i}`} className="fr-brief-lead">
+                    {c.text}{' '}
+                    {c.cites.map((cite) => (
+                      <code key={cite} className="fr-cite">
+                        {cite}
+                      </code>
+                    ))}
+                  </p>
+                ))}
+                {SECTIONS.map(({ key, label }) => {
+                  const rows = brief.claims.filter((c) => c.section === key);
+                  if (rows.length === 0) return null;
+                  return (
+                    <div key={key} className="fr-brief-section">
+                      <div className="fr-brief-section-h">{label}</div>
+                      <ul className="fr-brief-claims">{rows.map(claimRow)}</ul>
+                    </div>
+                  );
+                })}
+                {untagged.length > 0 && (
+                  <ul className="fr-brief-claims">{untagged.map(claimRow)}</ul>
+                )}
+              </>
+            );
+          })()}
+          {brief.disclaimer && <p className="fr-brief-disc">{brief.disclaimer}</p>}
+        </div>
+      )}
+      <div className="fr-ledger-table">
+        <table data-testid="fr-ledger-table">
+          <thead>
+            <tr>
+              <th>layer</th>
+              <th>tier</th>
+              <th>source</th>
+              <th>license</th>
+              <th>what it is</th>
+              <th>fresh</th>
+            </tr>
+          </thead>
+          <tbody>
+            {layers.map((l) => {
+              const t = TIER[l.kind] ?? { label: l.kind, cls: '' };
+              const stem = l.sidecar ? l.sidecar.replace('data/', '').replace('.json', '') : null;
+              const mf = stem ? man.layers?.[stem] : undefined;
+              const fresh = !l.sidecar ? 'core' : mf?.present ? ageDays(mf.generated_at) : 'absent';
+              return (
+                <tr key={l.id}>
+                  <td>
+                    <code>{l.id}</code>
+                  </td>
+                  <td>
+                    <span className={`fr-tier ${t.cls}`}>{t.label}</span>
+                  </td>
+                  <td>
+                    {l.source ? (
+                      l.source.url ? (
+                        <a href={l.source.url} target="_blank" rel="noreferrer">
+                          {l.source.name}
+                        </a>
+                      ) : (
+                        l.source.name
+                      )
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td>{l.source?.license ?? '—'}</td>
+                  <td className="fr-ledger-what">{l.metric ?? l.honesty_note ?? '—'}</td>
+                  <td>
+                    {fresh}
+                    {l.contract_monitored && (
+                      <span
+                        className="fr-ledger-mon"
+                        title="Shape machine-checked every refresh by the upstream drift detector (schema + liveness)"
+                      >
+                        shape ✓
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
