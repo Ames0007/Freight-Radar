@@ -2,13 +2,13 @@
   "tier": "DERIVED",
   "metric": null,
   "agent_model": "deterministic template reasoner (no model in the loop)",
-  "generated_at": "2026-10-12T15:43:49+00:00",
-  "as_of": "2026-10-04",
+  "generated_at": "2026-10-19T13:33:31+00:00",
+  "as_of": "2026-10-11",
   "method": "An offline deterministic step reads the published store, grounds every claim through verify(), and the briefing is gate-validated (attribution + abstention + the language firewall) before it ships. Selection, phrasing (fixed templates), and gating are all deterministic Python \u2014 no model anywhere in the loop.",
   "disclaimer": "DERIVED \u2014 templated commentary computed over the cited facts; no model wrote this. Every claim traces to a layer; co-occurrence is association, never causation.",
   "claims": [
     {
-      "text": "This week \u2014 the Global Ocean Freight Stress Index reads 42.2 (label: high), with 396 ports and chokepoints carrying an FDR-significant disruption flag.",
+      "text": "This week \u2014 the Global Ocean Freight Stress Index reads 39.3 (label: high), with 386 ports and chokepoints carrying an FDR-significant disruption flag.",
       "cites": [
         "stress",
         "flags"
@@ -16,28 +16,28 @@
       "section": "lead"
     },
     {
-      "text": "Strait of Hormuz shows a transit change of -64.2% versus its baseline \u2014 a measured reading, never a stated cause.",
+      "text": "Strait of Hormuz shows a transit change of -63.1% versus its baseline \u2014 a measured reading, never a stated cause.",
       "cites": [
         "flags"
       ],
       "section": "spine"
     },
     {
-      "text": "Our freight-cost signal flags the Truckload freight rate at a +1.92 z-score \u2014 an anomaly we computed, association only.",
+      "text": "Our freight-cost signal flags the Truckload freight rate at a +2.72 z-score \u2014 an anomaly we computed, association only.",
       "cites": [
         "freight_rate"
       ],
       "section": "spine"
     },
     {
-      "text": "At the Panama Canal, the Gatun lake level reads 85.39 ft, in the 42.2th percentile all-time.",
+      "text": "At the Panama Canal, the Gatun lake level reads 85.93 ft, in the 55.9th percentile all-time.",
       "cites": [
         "gatun"
       ],
       "section": "spine"
     },
     {
-      "text": "Kerch Strait transit change of -100.0% (measured) co-occurs this week with 4 cited news reports (Baird Maritime, Al Majalla, Khmer Times, \u2026) \u2014 possibly-related context, never a stated cause.",
+      "text": "Kerch Strait transit change of -99.1% (measured) co-occurs this week with 4 cited news reports (Britannica, \u0423\u043a\u0440\u0430\u0457\u043d\u0441\u044c\u043a\u0456 \u041d\u0430\u0446\u0456\u043e\u043d\u0430\u043b\u044c\u043d\u0456 \u041d\u043e\u0432\u0438\u043d\u0438 (\u0423\u041d\u041d), Baird Maritime, \u2026) \u2014 possibly-related context, never a stated cause.",
       "cites": [
         "flags",
         "news"
@@ -46,7 +46,7 @@
       "flag_id": "3c6262bd76a15255"
     },
     {
-      "text": "Strait of Hormuz transit change of -64.2% (measured) co-occurs this week with 4 cited news reports (Al Jazeera, The Hill, CNN, \u2026) \u2014 possibly-related context, never a stated cause.",
+      "text": "Strait of Hormuz transit change of -63.1% (measured) co-occurs this week with 4 cited news reports (NBC News, New York Post, CNBC, \u2026) \u2014 possibly-related context, never a stated cause.",
       "cites": [
         "flags",
         "news"
@@ -55,16 +55,16 @@
       "flag_id": "c03c46b0a94df286"
     },
     {
-      "text": "Santiago De Cuba activity change of -100.0% (measured) co-occurs this week with 4 cited news reports (CubaHeadlines, CiberCuba, \u2026) \u2014 possibly-related context, never a stated cause.",
+      "text": "Freetown activity change of 460.0% (measured) co-occurs this week with 4 cited news reports (South China Morning Post, Trinidad Express Newspapers, Britannica, \u2026) \u2014 possibly-related context, never a stated cause.",
       "cites": [
         "flags",
         "news"
       ],
       "section": "connection",
-      "flag_id": "10cb0d9239263ba1"
+      "flag_id": "0fea9a7c8550b206"
     },
     {
-      "text": "Cited context this week: 228 USGS earthquakes and 250 NASA EONET natural events near the chain.",
+      "text": "Cited context this week: 162 USGS earthquakes and 250 NASA EONET natural events near the chain.",
       "cites": [
         "quakes",
         "eonet"
